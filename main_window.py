@@ -97,11 +97,23 @@ class CommSetupDialog(tk.Toplevel):
 
 
 class MainWindow(tk.Tk):
+    def validate_address(self, value):
+        """Validate address entry"""
+        # Allow empty value for deletion
+        if value == "":
+            return True
+        # Check if value is numeric and in valid range
+        try:
+            num = int(value)
+            return 1 <= num <= 247
+        except ValueError:
+            return False
+
     def __init__(self):
         super().__init__()
         
         self.title("Modbus RTU Tool")
-        self.geometry("800x600")
+        self.geometry("1200x600")
         
         # Initialize variables
         self.scanning = False
@@ -113,9 +125,10 @@ class MainWindow(tk.Tk):
         self.main_frame = ttk.Frame(self, padding="10")
         self.main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Create left frame for COMM setup and device discovery
-        self.left_frame = ttk.Frame(self.main_frame)
+        # Create left frame for COMM setup and device discovery (fixed width)
+        self.left_frame = ttk.Frame(self.main_frame, width=300)
         self.left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        self.left_frame.pack_propagate(False)  # Maintain fixed width
         
         # Create right frame for registers data
         self.right_frame = ttk.Frame(self.main_frame)
@@ -150,21 +163,29 @@ class MainWindow(tk.Tk):
         self.discovery_frame = ttk.LabelFrame(self.left_frame, text="Device Discovery", padding="10")
         self.discovery_frame.pack(anchor=tk.W, fill=tk.X, pady=(10, 0))
         
-        # Address range frame
-        address_frame = ttk.Frame(self.discovery_frame)
-        address_frame.pack(fill=tk.X)
+        # Create address range frame with fixed width
+        addr_frame = ttk.Frame(self.discovery_frame)
+        addr_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Start Address
-        ttk.Label(address_frame, text="Start Address:").pack(side=tk.LEFT)
-        self.start_address = ttk.Entry(address_frame, width=5)
-        self.start_address.insert(0, "1")
-        self.start_address.pack(side=tk.LEFT, padx=(5, 10))
+        # Start address (left-aligned)
+        start_frame = ttk.Frame(addr_frame)
+        start_frame.pack(side=tk.LEFT)
+        ttk.Label(start_frame, text="Start:", width=6, anchor='e').pack(side=tk.LEFT)
+        vcmd = (self.register(self.validate_address), '%P')
+        self.start_addr = ttk.Entry(start_frame, width=4, justify=tk.CENTER, validate='key', validatecommand=vcmd)
+        self.start_addr.pack(side=tk.LEFT, padx=(2, 10))
+        self.start_addr.insert(0, "1")
         
-        # End Address
-        ttk.Label(address_frame, text="End Address:").pack(side=tk.LEFT)
-        self.end_address = ttk.Entry(address_frame, width=5)
-        self.end_address.insert(0, "10")
-        self.end_address.pack(side=tk.LEFT, padx=5)
+        # End address (right-aligned)
+        end_frame = ttk.Frame(addr_frame)
+        end_frame.pack(side=tk.LEFT)
+        ttk.Label(end_frame, text="End:", width=4, anchor='e').pack(side=tk.LEFT)
+        self.end_addr = ttk.Entry(end_frame, width=4, justify=tk.CENTER, validate='key', validatecommand=vcmd)
+        self.end_addr.pack(side=tk.LEFT, padx=2)
+        self.end_addr.insert(0, "10")
+        
+        self.start_addr.config(validate='key', validatecommand=vcmd)
+        self.end_addr.config(validate='key', validatecommand=vcmd)
         
         # Buttons frame
         button_frame = ttk.Frame(self.discovery_frame)
@@ -218,6 +239,7 @@ class MainWindow(tk.Tk):
             ("Read Input Registers (04)", "input")
         ]
         
+        # Add radio buttons in a single row
         for text, value in register_types:
             ttk.Radiobutton(
                 self.register_type_frame,
@@ -225,22 +247,28 @@ class MainWindow(tk.Tk):
                 value=value,
                 variable=self.register_type,
                 command=self.read_registers
-            ).pack(side=tk.LEFT, padx=5)
+            ).pack(side=tk.LEFT, padx=8)
         
-        # Register count frame
-        count_frame = ttk.Frame(self.registers_frame)
-        count_frame.pack(fill=tk.X, pady=(0, 10))
+        # Register count and device info frame
+        info_frame = ttk.Frame(self.registers_frame)
+        info_frame.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Label(count_frame, text="Number of registers:").pack(side=tk.LEFT)
+        # Register count and device info in single row
+        ttk.Label(info_frame, text="Number of registers:").pack(side=tk.LEFT)
         self.register_count = ttk.Spinbox(
-            count_frame,
+            info_frame,
             from_=1,
             to=100,
             width=5,
             command=self.read_registers
         )
         self.register_count.set("10")
-        self.register_count.pack(side=tk.LEFT, padx=5)
+        self.register_count.pack(side=tk.LEFT, padx=(5, 15))
+        
+        # Connected device info
+        ttk.Label(info_frame, text="Device Connected to:").pack(side=tk.LEFT)
+        self.connected_device_label = ttk.Label(info_frame, text="None")
+        self.connected_device_label.pack(side=tk.LEFT, padx=5)
         
         # Register values display
         self.register_display = ttk.Treeview(
@@ -301,8 +329,6 @@ class MainWindow(tk.Tk):
                 return None
         return None
         
-
-    
     def start_scan(self):
         """Start the device discovery scan"""
         if not self.config:
@@ -315,8 +341,8 @@ class MainWindow(tk.Tk):
             sleep(0.5)  # Give time for cleanup
             
         try:
-            start = int(self.start_address.get())
-            end = int(self.end_address.get())
+            start = int(self.start_addr.get())
+            end = int(self.end_addr.get())
             if not (1 <= start <= end <= 247):
                 raise ValueError
         except ValueError:
@@ -405,7 +431,7 @@ class MainWindow(tk.Tk):
                 try:
                     result = client.read_holding_registers(0, 1, unit=addr)
                     if result is not None:
-                        self.after(0, lambda a=addr: self.device_list.insert("", tk.END, values=(a, "Available")))
+                        self.after(0, lambda a=addr: self.device_list.insert("", tk.END, values=(a, "Available"), tags=()))
                 except:
                     pass  # Skip errors for faster scanning
                 
@@ -496,9 +522,10 @@ class MainWindow(tk.Tk):
                 self.modbus_client.disconnect()
                 self.modbus_client = None
             self.connected_device = None
-            self.device_list.item(selection[0], values=(address, "Available"))
-            # Clear display when disconnecting
+            self.device_list.item(selection[0], values=(address, "Available"), tags=())
+            # Clear display and update device label when disconnecting
             self.clear_register_display()
+            self.connected_device_label.config(text="None")
             return
             
         # Disconnect from any previously connected device
@@ -524,14 +551,15 @@ class MainWindow(tk.Tk):
                 if self.connected_device:
                     for item in self.device_list.get_children():
                         if int(self.device_list.item(item)['values'][0]) == self.connected_device:
-                            self.device_list.item(item, values=(self.connected_device, "Available"))
+                            self.device_list.item(item, values=(self.connected_device, "Available"), tags=())
                             break
                 
                 # Update new connected device
                 self.connected_device = address
                 self.device_list.item(selection[0], values=(address, "Connected"), tags=("connected",))
-                self.device_list.tag_configure("connected", background="lightgreen")
-                # Clear display and read registers for new device
+                self.device_list.tag_configure("connected", background="#90EE90")
+                # Update connected device label and read registers
+                self.connected_device_label.config(text=str(address))
                 self.clear_register_display()
                 self.read_registers()
             else:
