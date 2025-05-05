@@ -3,9 +3,15 @@ from tkinter import ttk, messagebox
 import serial.tools.list_ports
 import json
 import os
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from collections import defaultdict
+import time
 import threading
 from client import ModbusToolClient
 from time import sleep
+from datetime import datetime
+import matplotlib.dates as mdates
 import serial
 
 class CommSetupDialog(tk.Toplevel):
@@ -122,6 +128,14 @@ class MainWindow(tk.Tk):
         self.modified_values = set()
         self.connected_device = None
         self.modbus_client = None
+        
+        # Graph data storage
+        self.graph_data = defaultdict(lambda: {'times': [], 'values': []})
+        self.selected_for_graph = set()
+        self.graph_window = None
+        self.graph_update_job = None
+        self.MAX_TIME_WINDOW = 15 * 60  # 15 minutes in seconds
+        self.graph_start_time = None
         
         # Style configuration
         self.style = ttk.Style()
@@ -308,23 +322,35 @@ class MainWindow(tk.Tk):
         self.polling_interval.insert(0, "1000")
         self.polling_interval.pack(side=tk.LEFT, padx=5)
         
+        # Graph button
+        self.graph_button = ttk.Button(info_frame, text="Graph", command=self.show_graph, state=tk.DISABLED)
+        self.graph_button.pack(side=tk.LEFT, padx=5)
+        
         # Initialize polling variables
         self.polling_job = None
         
         # Register values display
         self.register_display = ttk.Treeview(
             self.registers_frame,
-            columns=("address", "value", "new_value"),
+            columns=("address", "value", "new_value", "graph"),
             show="headings",
             height=20
         )
         self.register_display.heading("address", text="Address")
         self.register_display.heading("value", text="Value")
         self.register_display.heading("new_value", text="New Value")
+        self.register_display.heading("graph", text="Plot")
         self.register_display.column("address", width=100)
         self.register_display.column("value", width=100)
         self.register_display.column("new_value", width=100)
+        self.register_display.column("graph", width=60)
+        
+        # Configure tag for checkbox column
+        self.register_display.tag_configure('checkbox_cell', background='#f0f0f0')
         self.register_display.pack(fill=tk.BOTH, expand=True)
+        
+        # Bind checkbox click
+        self.register_display.bind('<ButtonRelease-1>', self.handle_checkbox_click)
         
         # Bind double-click to create entry widget
         self.register_display.bind('<Double-1>', self.create_value_entry)
@@ -611,13 +637,13 @@ class MainWindow(tk.Tk):
         if self.value_entry:
             self.value_entry.destroy()
             self.value_entry = None
-
+            
     def read_registers(self, *args):
         """Read registers based on selected type"""
         if not hasattr(self, 'modbus_client') or not self.modbus_client or not self.connected_device:
             self.clear_register_display()
             return
-            
+
         try:
             count = int(self.register_count.get())
             if not (1 <= count <= 100):
@@ -625,14 +651,16 @@ class MainWindow(tk.Tk):
         except ValueError:
             messagebox.showerror("Error", "Invalid register count. Use numbers between 1-100")
             return
-            
+
         # Clear existing values
         for item in self.register_display.get_children():
             self.register_display.delete(item)
-            
+
         try:
             # Read values based on selected type
             reg_type = self.register_type.get()
+            current_time = time.time()
+
             if reg_type == "coils":
                 values = self.modbus_client.read_coils(0, count, self.connected_device)
             elif reg_type == "discrete":
@@ -641,25 +669,41 @@ class MainWindow(tk.Tk):
                 values = self.modbus_client.read_holding_registers(0, count, self.connected_device)
             else:  # input registers
                 values = self.modbus_client.read_input_registers(0, count, self.connected_device)
-                
+
             if values is not None:
                 for i, value in enumerate(values):
                     item_id = f"reg_{i}"
                     addr = i + 1  # Start addresses from 1
+                    reg_id = str(addr)
+
+                    # Store data for graphing if register is selected
+                    if reg_id in self.selected_for_graph:
+                        self.graph_data[reg_id]['times'].append(current_time)
+                        self.graph_data[reg_id]['values'].append(value)
+                        # Keep only last 100 points
+                        if len(self.graph_data[reg_id]['times']) > 100:
+                            self.graph_data[reg_id]['times'].pop(0)
+                            self.graph_data[reg_id]['values'].pop(0)
+
+                    # Add checkbox state
+                    checkbox_state = '☒' if reg_id in self.selected_for_graph else '☐'
+
                     # Check if item exists
                     if item_id in self.register_display.get_children():
                         current_values = self.register_display.item(item_id)['values']
                         new_value = current_values[2] if len(current_values) > 2 else str(value)
-                        self.register_display.item(item_id, values=(addr, value, new_value))
+                        self.register_display.item(item_id, values=(addr, value, new_value, checkbox_state))
                     else:
-                        self.register_display.insert("", tk.END, item_id, values=(addr, value, value))
+                        self.register_display.insert("", tk.END, item_id, values=(addr, value, value, checkbox_state))
+
                     # Restore modified tag if needed
                     if item_id in self.modified_values:
                         self.register_display.tag_configure('modified', background='#E6F3FF')
                         self.register_display.item(item_id, tags=('modified',))
+
         except Exception as e:
-            messagebox.showerror("Error", f"Error reading registers: {e}")
-    
+            print(f"Error reading registers: {e}")
+            
     def connect_to_device(self, event):
         """Connect to the selected device"""
         if not self.config:
@@ -750,6 +794,7 @@ class MainWindow(tk.Tk):
         self.live_var.set(True)
         self.live_button_frame.configure(background='green')
         self.live_button.configure(bg='green')
+        self.update_graph_button()
         self.schedule_next_poll()
         
     def stop_live_polling(self):
@@ -757,6 +802,13 @@ class MainWindow(tk.Tk):
         self.live_var.set(False)
         self.live_button_frame.configure(background='gray')
         self.live_button.configure(bg='gray')
+        self.update_graph_button()
+        
+        # Close graph window if open
+        if hasattr(self, 'graph_window') and self.graph_window:
+            self.graph_window.destroy()
+            self.graph_window = None
+            
         if hasattr(self, 'polling_job') and self.polling_job:
             self.after_cancel(self.polling_job)
             self.polling_job = None
@@ -778,6 +830,130 @@ class MainWindow(tk.Tk):
         """Cleanup when the window is destroyed"""
         self.stop_live_polling()
         self.disconnect_device()
+
+    def handle_checkbox_click(self, event):
+        """Handle checkbox click in the graph column"""
+        region = self.register_display.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+            
+        item = self.register_display.identify_row(event.y)
+        column = self.register_display.identify_column(event.x)
+        
+        # Check if click was in the graph column
+        if self.register_display.column(column, "id") != "graph":
+            return
+            
+        # Toggle checkbox
+        values = self.register_display.item(item, "values")
+        reg_id = values[0]  # Address is in first column
+        
+        # Always allow toggling, regardless of graph window state
+        if reg_id in self.selected_for_graph:
+            self.selected_for_graph.remove(reg_id)
+            new_values = values[:3] + ('☐',)
+        else:
+            self.selected_for_graph.add(reg_id)
+            new_values = values[:3] + ('☒',)
+            
+        self.register_display.item(item, values=new_values)
+        self.update_graph_button()
+        
+    def update_graph_button(self):
+        """Update graph button state based on conditions"""
+        if self.live_var.get() and self.selected_for_graph:
+            self.graph_button.configure(state=tk.NORMAL)
+        else:
+            self.graph_button.configure(state=tk.DISABLED)
+            
+    def show_graph(self):
+        """Show the graph window with selected registers"""
+        if self.graph_window is not None:
+            self.graph_window.lift()
+            return
+            
+        self.graph_window = tk.Toplevel(self)
+        self.graph_window.title("Live Data Graph")
+        self.graph_window.geometry("800x600")
+        
+        # Set start time when window opens
+        self.graph_start_time = time.time()
+        
+        # Clear existing data
+        self.graph_data.clear()
+        self.graph_data = defaultdict(lambda: {'times': [], 'values': []})
+        
+        # Handle window close
+        self.graph_window.protocol("WM_DELETE_WINDOW", self.on_graph_window_close)
+        
+        # Create figure and canvas
+        self.fig = Figure(figsize=(8, 6))
+        self.ax = self.fig.add_subplot(111)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.graph_window)
+        
+        # Configure plot
+        self.ax.set_xlabel('Time (minutes)')
+        self.ax.set_ylabel('Value')
+        self.ax.set_title('Live Register Values')
+        self.ax.grid(True)
+        
+        # Pack canvas
+        self.canvas.draw()
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # Start update loop
+        self.update_graph()
+        
+    def update_graph(self):
+        """Update the graph with new data"""
+        if not hasattr(self, 'graph_window') or not self.graph_window:
+            return
+            
+        self.ax.clear()
+        current_time = time.time()
+        elapsed_time = current_time - self.graph_start_time
+        
+        # Plot data for each selected register
+        for reg_id in self.selected_for_graph:
+            data = self.graph_data[reg_id]
+            if data['times'] and data['values']:
+                # Calculate elapsed minutes for each point
+                elapsed_minutes = [(t - self.graph_start_time) / 60 for t in data['times']]
+                self.ax.plot(elapsed_minutes, data['values'], label=f'Register {reg_id}', marker='o')
+        
+        # Configure axes
+        self.ax.set_xlabel('Time (minutes)')
+        self.ax.set_ylabel('Register Value')
+        
+        # Set x-axis limits
+        max_time = max(1, elapsed_time / 60)  # At least 1 minute window
+        self.ax.set_xlim([0, max_time])
+        
+        # Add grid
+        self.ax.grid(True, linestyle='--', alpha=0.7)
+        
+        # Update plot appearance
+        self.ax.grid(True)
+        self.ax.legend()
+        
+        # Adjust layout to prevent label cutoff
+        self.fig.tight_layout()
+        
+        # Draw the updated plot
+        self.canvas.draw()
+        
+        # Schedule next update
+        self.graph_update_job = self.after(1000, self.update_graph)  # Update every second
+        
+    def on_graph_window_close(self):
+        """Handle graph window closing"""
+        if self.graph_update_job:
+            self.after_cancel(self.graph_update_job)
+            self.graph_update_job = None
+        self.graph_window.destroy()
+        self.graph_window = None
+        self.graph_start_time = None
+        self.graph_data.clear()
 
 if __name__ == "__main__":
     app = MainWindow()
