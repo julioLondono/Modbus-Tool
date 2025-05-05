@@ -28,3 +28,10 @@ wheels/
 
 # Project specific
 comm_config.json
+
+# PyInstaller
+*.spec
+build/
+dist/
+__pycache__/
+*.pyc
