@@ -1,6 +1,6 @@
 # Modbus RTU Tool
 
-A desktop application for testing and debugging Modbus RTU slave devices. Built with Python and tkinter, this tool provides a user-friendly interface for Modbus communication and device discovery.
+A desktop application for testing and debugging Modbus RTU slave devices. Built with Python and tkinter, this tool provides a user-friendly interface for Modbus communication, device discovery, and real-time data visualization.
 
 ## Features
 
@@ -21,6 +21,13 @@ A desktop application for testing and debugging Modbus RTU slave devices. Built 
   - Connection retry mechanism
   - Clear status indicators
 
+- **Real-time Data Visualization**
+  - Live plotting of register values
+  - Multiple register selection via checkboxes
+  - Time-based x-axis with scrolling view
+  - Auto-scaling y-axis
+  - Clear legend and grid lines
+
 ## Requirements
 
 - Python 3.x
@@ -29,6 +36,12 @@ A desktop application for testing and debugging Modbus RTU slave devices. Built 
 
 ## Installation
 
+### Option 1: Executable (Windows)
+1. Download the latest release from the [Releases](https://github.com/julioLondono/Modbus-Tool/releases) page
+2. Extract the ModbusTool.zip file
+3. Run `Modbus Tool.exe`
+
+### Option 2: From Source
 1. Clone the repository:
 ```bash
 git clone https://github.com/julioLondono/Modbus-Tool.git
@@ -43,9 +56,8 @@ pip install -r requirements.txt
 ## Usage
 
 1. Run the application:
-```bash
-python main_window.py
-```
+   - If using the executable, double-click `Modbus Tool.exe`
+   - If running from source: `python main_window.py`
 
 2. Configure COM Port:
    - Click "COMM Setup"
@@ -63,6 +75,12 @@ python main_window.py
    - Double-click a discovered device to connect
    - Double-click again to disconnect
 
+5. Monitor Register Values:
+   - Select registers to monitor by clicking checkboxes
+   - Start live polling
+   - Click the Graph button to open visualization
+   - Watch real-time value changes
+
 ## Contributing
 
 Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
@@ -75,3 +93,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - Built with [pymodbus](https://github.com/pymodbus-dev/pymodbus)
 - Uses [pyserial](https://github.com/pyserial/pyserial) for serial communication
+- Uses [matplotlib](https://matplotlib.org/) for data visualization
