@@ -125,21 +125,42 @@ class ModbusToolClient:
             self.port_manager = None
             time.sleep(0.5)  # Wait for cleanup
 
+    def read_coils(self, address, count, unit=1):
+        """Read coils (function code 01)."""
+        try:
+            result = self.client.read_coils(address=address, count=count, slave=unit)
+            if hasattr(result, 'bits'):
+                return result.bits
+        except ModbusException as e:
+            print(f"Error reading coils: {e}")
+        return None
+
+    def read_discrete_inputs(self, address, count, unit=1):
+        """Read discrete inputs (function code 02)."""
+        try:
+            result = self.client.read_discrete_inputs(address=address, count=count, slave=unit)
+            if hasattr(result, 'bits'):
+                return result.bits
+        except ModbusException as e:
+            print(f"Error reading discrete inputs: {e}")
+        return None
+
     def read_holding_registers(self, address, count, unit=1):
-        """Read holding registers.
-        
-        Args:
-            address (int): Starting address
-            count (int): Number of registers to read
-            unit (int): Unit ID of the target device
-        
-        Returns:
-            list: Register values if successful, None if failed
-        """
+        """Read holding registers (function code 03)."""
         try:
             result = self.client.read_holding_registers(address=address, count=count, slave=unit)
             if hasattr(result, 'registers'):
                 return result.registers
         except ModbusException as e:
-            print(f"Error reading registers: {e}")
+            print(f"Error reading holding registers: {e}")
+        return None
+
+    def read_input_registers(self, address, count, unit=1):
+        """Read input registers (function code 04)."""
+        try:
+            result = self.client.read_input_registers(address=address, count=count, slave=unit)
+            if hasattr(result, 'registers'):
+                return result.registers
+        except ModbusException as e:
+            print(f"Error reading input registers: {e}")
         return None

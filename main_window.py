@@ -113,9 +113,13 @@ class MainWindow(tk.Tk):
         self.main_frame = ttk.Frame(self, padding="10")
         self.main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Create left frame for COMM setup
+        # Create left frame for COMM setup and device discovery
         self.left_frame = ttk.Frame(self.main_frame)
         self.left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        
+        # Create right frame for registers data
+        self.right_frame = ttk.Frame(self.main_frame)
+        self.right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         # Create COMM Setup button
         self.comm_setup_btn = ttk.Button(
@@ -196,6 +200,60 @@ class MainWindow(tk.Tk):
         
         # Bind double-click event for connection
         self.device_list.bind("<Double-1>", self.connect_to_device)
+        
+        # Create Registers Data frame
+        self.registers_frame = ttk.LabelFrame(self.right_frame, text="Registers Data", padding="10")
+        self.registers_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Register type selection frame
+        self.register_type_frame = ttk.Frame(self.registers_frame)
+        self.register_type_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Register type radio buttons
+        self.register_type = tk.StringVar(value="holding")
+        register_types = [
+            ("Read Coils (01)", "coils"),
+            ("Read Discrete Inputs (02)", "discrete"),
+            ("Read Holding Registers (03)", "holding"),
+            ("Read Input Registers (04)", "input")
+        ]
+        
+        for text, value in register_types:
+            ttk.Radiobutton(
+                self.register_type_frame,
+                text=text,
+                value=value,
+                variable=self.register_type,
+                command=self.read_registers
+            ).pack(side=tk.LEFT, padx=5)
+        
+        # Register count frame
+        count_frame = ttk.Frame(self.registers_frame)
+        count_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(count_frame, text="Number of registers:").pack(side=tk.LEFT)
+        self.register_count = ttk.Spinbox(
+            count_frame,
+            from_=1,
+            to=100,
+            width=5,
+            command=self.read_registers
+        )
+        self.register_count.set("10")
+        self.register_count.pack(side=tk.LEFT, padx=5)
+        
+        # Register values display
+        self.register_display = ttk.Treeview(
+            self.registers_frame,
+            columns=("address", "value"),
+            show="headings",
+            height=15
+        )
+        self.register_display.heading("address", text="Address")
+        self.register_display.heading("value", text="Value")
+        self.register_display.column("address", width=100)
+        self.register_display.column("value", width=100)
+        self.register_display.pack(fill=tk.BOTH, expand=True)
         
         # Load last configuration
         self.config = self.load_configuration()
@@ -376,6 +434,49 @@ class MainWindow(tk.Tk):
             except:
                 pass
     
+    def clear_register_display(self):
+        """Clear all values from the register display"""
+        for item in self.register_display.get_children():
+            self.register_display.delete(item)
+
+    def read_registers(self, *args):
+        """Read registers based on selected type"""
+        if not hasattr(self, 'modbus_client') or not self.modbus_client or not self.connected_device:
+            self.clear_register_display()
+            return
+            
+        try:
+            count = int(self.register_count.get())
+            if not (1 <= count <= 100):
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Error", "Invalid register count. Use numbers between 1-100")
+            return
+            
+        # Clear existing values
+        for item in self.register_display.get_children():
+            self.register_display.delete(item)
+            
+        try:
+            # Read values based on selected type
+            reg_type = self.register_type.get()
+            if reg_type == "coils":
+                values = self.modbus_client.read_coils(0, count, self.connected_device)
+            elif reg_type == "discrete":
+                values = self.modbus_client.read_discrete_inputs(0, count, self.connected_device)
+            elif reg_type == "holding":
+                values = self.modbus_client.read_holding_registers(0, count, self.connected_device)
+            else:  # input registers
+                values = self.modbus_client.read_input_registers(0, count, self.connected_device)
+                
+            if values is not None:
+                for i, value in enumerate(values):
+                    self.register_display.insert("", tk.END, values=(i, value))
+            else:
+                messagebox.showerror("Error", f"Failed to read {reg_type}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Error reading registers: {e}")
+    
     def connect_to_device(self, event):
         """Connect to the selected device"""
         if not self.config:
@@ -386,31 +487,33 @@ class MainWindow(tk.Tk):
         if not selection:
             return
             
-        # Get the selected device address
-        item = self.device_list.item(selection[0])
-        address = int(item['values'][0])
+        # Get device address from selection
+        address = int(self.device_list.item(selection[0])["values"][0])
         
-        # If we're already connected to this device, disconnect
+        # If clicking the same device, disconnect it
         if self.connected_device == address:
             if self.modbus_client:
                 self.modbus_client.disconnect()
                 self.modbus_client = None
             self.connected_device = None
             self.device_list.item(selection[0], values=(address, "Available"))
+            # Clear display when disconnecting
+            self.clear_register_display()
             return
             
         # Disconnect from any previously connected device
         if self.modbus_client:
             self.modbus_client.disconnect()
             
+        # Convert parity from text to single letter
+        parity_map = {'none': 'N', 'even': 'E', 'odd': 'O'}
+        parity = parity_map.get(self.config['parity'].lower(), 'N')
+        
         try:
-            # Convert parity from text to single letter
-            parity_map = {'none': 'N', 'even': 'E', 'odd': 'O'}
-            parity = parity_map.get(self.config['parity'].lower(), 'N')
-            
+            # Create new Modbus client
             self.modbus_client = ModbusToolClient(
-                mode='rtu',
                 port=self.config['port'],
+                mode='rtu',
                 baudrate=int(self.config['baudrate']),
                 parity=parity,
                 bytesize=int(self.config['bytesize'])
@@ -428,9 +531,11 @@ class MainWindow(tk.Tk):
                 self.connected_device = address
                 self.device_list.item(selection[0], values=(address, "Connected"), tags=("connected",))
                 self.device_list.tag_configure("connected", background="lightgreen")
+                # Clear display and read registers for new device
+                self.clear_register_display()
+                self.read_registers()
             else:
                 messagebox.showerror("Error", "Failed to connect to device")
-                
         except Exception as e:
             messagebox.showerror("Error", f"Connection error: {str(e)}")
 
