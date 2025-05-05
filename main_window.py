@@ -112,14 +112,35 @@ class MainWindow(tk.Tk):
     def __init__(self):
         super().__init__()
         
-        self.title("Modbus RTU Tool")
+        self.title("Modbus Tool")
         self.geometry("1200x600")
         
         # Initialize variables
         self.scanning = False
         self.scan_thread = None
-        self.modbus_client = None
+        self.value_entry = None
+        self.modified_values = set()
         self.connected_device = None
+        self.modbus_client = None
+        
+        # Style configuration
+        self.style = ttk.Style()
+        # Configure inactive style (gray)
+        self.style.configure('Live.TButton',
+            background='gray',
+            foreground='white',
+            bordercolor='gray',
+            darkcolor='gray',
+            lightcolor='gray',
+            relief='flat')
+        # Configure active style (green)
+        self.style.configure('LiveActive.TButton',
+            background='green',
+            foreground='white',
+            bordercolor='green',
+            darkcolor='green',
+            lightcolor='green',
+            relief='flat')
         
         # Create main frame with padding
         self.main_frame = ttk.Frame(self, padding="10")
@@ -255,20 +276,40 @@ class MainWindow(tk.Tk):
         
         # Register count and device info in single row
         ttk.Label(info_frame, text="Number of registers:").pack(side=tk.LEFT)
-        self.register_count = ttk.Spinbox(
-            info_frame,
-            from_=1,
-            to=100,
-            width=5,
-            command=self.read_registers
-        )
-        self.register_count.set("10")
+        self.register_count = ttk.Entry(info_frame, width=5)
+        self.register_count.insert(0, "10")
         self.register_count.pack(side=tk.LEFT, padx=(5, 15))
         
         # Connected device info
         ttk.Label(info_frame, text="Device Connected to:").pack(side=tk.LEFT)
         self.connected_device_label = ttk.Label(info_frame, text="None")
         self.connected_device_label.pack(side=tk.LEFT, padx=5)
+        
+        # Live Polling Controls
+        self.live_var = tk.BooleanVar(value=False)
+        
+        # Create a frame for the live button with initial gray background
+        self.live_button_frame = tk.Frame(info_frame, background='gray')
+        self.live_button_frame.pack(side=tk.LEFT, padx=5)
+        
+        # Create the button inside the frame
+        self.live_button = tk.Button(self.live_button_frame, 
+                                   text="Live",
+                                   command=self.toggle_live_polling,
+                                   bg='gray',
+                                   fg='black',
+                                   relief='flat',
+                                   bd=0)
+        self.live_button.pack(expand=True, fill='both', padx=1, pady=1)
+        
+        # Polling Interval Entry
+        ttk.Label(info_frame, text="Interval (ms):").pack(side=tk.LEFT, padx=2)
+        self.polling_interval = ttk.Entry(info_frame, width=6)
+        self.polling_interval.insert(0, "1000")
+        self.polling_interval.pack(side=tk.LEFT, padx=5)
+        
+        # Initialize polling variables
+        self.polling_job = None
         
         # Register values display
         self.register_display = ttk.Treeview(
@@ -683,6 +724,60 @@ class MainWindow(tk.Tk):
         except Exception as e:
             messagebox.showerror("Error", f"Connection error: {str(e)}")
 
+
+    def toggle_live_polling(self):
+        """Toggle live polling on/off"""
+        if not self.modbus_client or not self.connected_device:
+            messagebox.showerror("Error", "Please connect to a device first")
+            return
+            
+        try:
+            interval = int(self.polling_interval.get())
+            if interval < 100:
+                messagebox.showerror("Error", "Interval must be at least 100ms")
+                return
+        except ValueError:
+            messagebox.showerror("Error", "Invalid polling interval")
+            return
+            
+        if not self.live_var.get():
+            self.start_live_polling()
+        else:
+            self.stop_live_polling()
+            
+    def start_live_polling(self):
+        """Start live polling of registers"""
+        self.live_var.set(True)
+        self.live_button_frame.configure(background='green')
+        self.live_button.configure(bg='green')
+        self.schedule_next_poll()
+        
+    def stop_live_polling(self):
+        """Stop live polling of registers"""
+        self.live_var.set(False)
+        self.live_button_frame.configure(background='gray')
+        self.live_button.configure(bg='gray')
+        if hasattr(self, 'polling_job') and self.polling_job:
+            self.after_cancel(self.polling_job)
+            self.polling_job = None
+            
+    def schedule_next_poll(self):
+        """Schedule the next polling cycle"""
+        if not self.live_var.get():
+            return
+            
+        try:
+            interval = int(self.polling_interval.get())
+            self.read_registers()
+            self.polling_job = self.after(interval, self.schedule_next_poll)
+        except ValueError:
+            self.stop_live_polling()
+            messagebox.showerror("Error", "Invalid polling interval")
+            
+    def __del__(self):
+        """Cleanup when the window is destroyed"""
+        self.stop_live_polling()
+        self.disconnect_device()
 
 if __name__ == "__main__":
     app = MainWindow()
