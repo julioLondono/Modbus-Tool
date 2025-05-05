@@ -164,3 +164,31 @@ class ModbusToolClient:
         except ModbusException as e:
             print(f"Error reading input registers: {e}")
         return None
+
+
+        
+    def write_register(self, address, value, unit=1):
+        """Write to a single holding register."""
+        try:
+            print(f"Writing to register - Address: {address}, Value: {value}, Unit: {unit}")
+            result = self.client.write_register(address=address, value=value, slave=unit)
+            if result.isError():
+                print(f"Error writing to register: {result}")
+                return False
+            return True
+        except Exception as e:
+            print(f"Exception writing to register: {e}")
+            return False
+        
+    def write_coil(self, address, value, unit=1):
+        """Write to a single coil."""
+        try:
+            print(f"Writing to coil - Address: {address}, Value: {value}, Unit: {unit}")
+            result = self.client.write_coil(address=address, value=value, slave=unit)
+            if result.isError():
+                print(f"Error writing to coil {address}: {result}")
+                return False
+            return True
+        except ModbusException as e:
+            print(f"Error writing to coil: {e}")
+            return False

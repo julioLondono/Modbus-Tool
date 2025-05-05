@@ -273,15 +273,26 @@ class MainWindow(tk.Tk):
         # Register values display
         self.register_display = ttk.Treeview(
             self.registers_frame,
-            columns=("address", "value"),
+            columns=("address", "value", "new_value"),
             show="headings",
-            height=15
+            height=20
         )
         self.register_display.heading("address", text="Address")
         self.register_display.heading("value", text="Value")
+        self.register_display.heading("new_value", text="New Value")
         self.register_display.column("address", width=100)
         self.register_display.column("value", width=100)
+        self.register_display.column("new_value", width=100)
         self.register_display.pack(fill=tk.BOTH, expand=True)
+        
+        # Bind double-click to create entry widget
+        self.register_display.bind('<Double-1>', self.create_value_entry)
+        
+        # Store entry widget reference
+        self.value_entry = None
+        
+        # Store modified values
+        self.modified_values = set()
         
         # Load last configuration
         self.config = self.load_configuration()
@@ -461,9 +472,104 @@ class MainWindow(tk.Tk):
                 pass
     
     def clear_register_display(self):
-        """Clear all values from the register display"""
+        """Clear the register display"""
         for item in self.register_display.get_children():
             self.register_display.delete(item)
+        self.modified_values.clear()
+        
+    def create_value_entry(self, event):
+        """Create an entry widget for editing values"""
+        # Get the clicked item and column
+        item = self.register_display.identify_row(event.y)
+        column = self.register_display.identify_column(event.x)
+        
+        # Only create entry for new_value column
+        if not item or column != '#3':
+            return
+            
+        # Check if register type is writable
+        reg_type = self.register_type.get()
+        if reg_type in ['input', 'discrete']:
+            messagebox.showinfo("Info", f"{reg_type.title()} registers are read-only")
+            return
+            
+        # Get column box coordinates
+        x, y, w, h = self.register_display.bbox(item, 'new_value')
+        
+        # Create and position entry widget
+        entry = ttk.Entry(self.register_display, width=15)
+        current_value = self.register_display.set(item, 'new_value')
+        entry.insert(0, current_value)
+        entry.select_range(0, tk.END)
+        
+        # Position the entry
+        entry.place(x=x, y=y, width=w, height=h)
+        entry.focus()
+        
+        # Store reference to destroy later
+        self.value_entry = entry
+        
+        # Bind events
+        entry.bind('<Return>', lambda e, i=item: self.save_value(i))
+        entry.bind('<Escape>', lambda e: self.cancel_edit())
+        entry.bind('<FocusOut>', lambda e: self.cancel_edit())
+        
+    def save_value(self, item):
+        """Save the edited value and write to register"""
+        if not self.value_entry or not self.modbus_client or not self.connected_device:
+            print("Cannot write: No entry widget, client, or device connected")
+            self.cancel_edit()
+            return
+            
+        try:
+            # Get the new value
+            new_value = int(self.value_entry.get())
+            address = int(self.register_display.set(item, 'address'))
+            reg_type = self.register_type.get()
+            print(f"Writing to {reg_type} register {address} (0-based: {address-1}), value: {new_value}")
+            
+            # Only allow writes to coils and holding registers
+            if reg_type not in ['holding', 'coil']:
+                print(f"Cannot write to {reg_type} registers")
+                messagebox.showerror("Error", f"Cannot write to {reg_type} registers")
+                self.cancel_edit()
+                return
+            
+            # Write value based on register type
+            success = False
+            unit = self.connected_device  # Get the connected device unit ID
+            if reg_type == 'holding':
+                print(f"Writing {new_value} to holding register {address} on unit {unit}")
+                success = self.modbus_client.write_register(address-1, new_value, unit=unit)
+            elif reg_type == 'coil':
+                print(f"Writing {bool(new_value)} to coil {address} on unit {unit}")
+                success = self.modbus_client.write_coil(address-1, bool(new_value), unit=unit)
+                
+            print(f"Write {'successful' if success else 'failed'}")
+            
+            if success:
+                # Update display
+                self.register_display.set(item, 'value', str(new_value))  # Update original value
+                self.register_display.set(item, 'new_value', str(new_value))  # Update new value
+                # Clear modified state since value is now written
+                self.modified_values.discard(item)
+                self.register_display.item(item, tags=())
+            else:
+                messagebox.showerror("Error", "Failed to write value to register")
+        except ValueError as e:
+            print(f"Value error: {e}")
+            messagebox.showerror("Error", "Invalid value entered")
+        except Exception as e:
+            print(f"Error writing value: {e}")
+            messagebox.showerror("Error", f"Error writing value: {e}")
+        finally:
+            self.cancel_edit()
+            
+    def cancel_edit(self):
+        """Cancel the value edit"""
+        if self.value_entry:
+            self.value_entry.destroy()
+            self.value_entry = None
 
     def read_registers(self, *args):
         """Read registers based on selected type"""
@@ -497,9 +603,19 @@ class MainWindow(tk.Tk):
                 
             if values is not None:
                 for i, value in enumerate(values):
-                    self.register_display.insert("", tk.END, values=(i, value))
-            else:
-                messagebox.showerror("Error", f"Failed to read {reg_type}")
+                    item_id = f"reg_{i}"
+                    addr = i + 1  # Start addresses from 1
+                    # Check if item exists
+                    if item_id in self.register_display.get_children():
+                        current_values = self.register_display.item(item_id)['values']
+                        new_value = current_values[2] if len(current_values) > 2 else str(value)
+                        self.register_display.item(item_id, values=(addr, value, new_value))
+                    else:
+                        self.register_display.insert("", tk.END, item_id, values=(addr, value, value))
+                    # Restore modified tag if needed
+                    if item_id in self.modified_values:
+                        self.register_display.tag_configure('modified', background='#E6F3FF')
+                        self.register_display.item(item_id, tags=('modified',))
         except Exception as e:
             messagebox.showerror("Error", f"Error reading registers: {e}")
     
